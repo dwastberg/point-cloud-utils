@@ -2,10 +2,20 @@
 <h4 align="center"><i>A Python library for common tasks on 3D point clouds and meshes</i></h4>
 
 --------------------------
-
 ![build workflow](https://github.com/fwilliams/point-cloud-utils/actions/workflows/build-wheels-and-publish-to-pipy.yml/badge.svg)
-<!-- [![Build Status](https://travis-ci.com/fwilliams/point-cloud-utils.svg?branch=master)](https://travis-ci.com/fwilliams/point-cloud-utils) -->
-<!-- [![Build status](https://ci.appveyor.com/api/projects/status/ujv44lqbeosgl9ij/branch/master?svg=true)](https://ci.appveyor.com/project/fwilliams/point-cloud-utils/branch/master) -->
+
+Author: [Francis Williams](https://www.fwilliams.info)
+
+If Point Cloud Utils contributes to an academic publication, cite it as:
+```
+@misc{point-cloud-utils,
+  title = {Point Cloud Utils},
+  author = {Francis Williams},
+  note = {https://www.github.com/fwilliams/point-cloud-utils},
+  year = {2022}
+}
+```
+--------------------------
 
 **Point Cloud Utils (pcu)** is a utility library providing the following functionality for 3D processing point clouds and triangle meshes. See the [Examples section](#Examples) for documentation on how to use these:
  - Utility functions for reading and writing many common mesh formats (PLY, STL, OFF, OBJ, 3DS, VRML 2.0, X3D, COLLADA).
@@ -26,9 +36,14 @@
  - Compute signed distances between a point cloud and a mesh using [Fast Winding Numbers](https://www.dgp.toronto.edu/projects/fast-winding-numbers/)
  - Compute closest points on a mesh to a point cloud
  - Deduplicating point clouds and mesh vertices
+ - Fast ray/mesh intersection using [embree](https://www.embree.org/)
+ - Fast ray/surfel intersection using [embree](https://www.embree.org/)
  - Mesh smoothing
+ - Mesh connected components
+ - Mesh decimation
+ - Removing duplicate/unreferenced vertices in point clouds and meshes
  - Making a mesh watertight (based on the [Watertight Manifold](https://github.com/hjwdzh/Manifold) algorithm)
- 
+
 <!-- ![Example of Poisson Disk Sampling](/img/blue_noise.png?raw=true "Example of Poisson Disk Sampling") -->
 
 # Installation
@@ -39,7 +54,7 @@ conda install -c conda-forge point_cloud_utils
 ``` -->
 
 ```
-pip install pypcu
+pip install point-cloud-utils
 ```
 
 <!--
@@ -62,6 +77,9 @@ The following dependencies are required to install with `pip`:
 - [Downsample a point cloud to have a blue noise distribution](#downsample-a-point-cloud-to-have-a-blue-noise-distribution)
 - [Downsample a point cloud on a voxel grid](#downsample-a-point-cloud-on-a-voxel-grid)
 - [Estimating normals from a point cloud](#estimating-normals-from-a-point-cloud)
+- [Computing mesh normals per vertex](#computing-mesh-normals-per-vertex)
+- [Computing mesh normals per face](#computing-mesh-normals-per-face)
+- [Consistently orienting faces of a mesh](#consistently-orienting-faces-of-a-mesh)
 - [Approximate Wasserstein (Sinkhorn) distance between two point clouds](#approximate-wasserstein-sinkhorn-distance-between-two-point-clouds)
 - [Chamfer distance between two point clouds](#chamfer-distance-between-two-point-clouds)
 - [Hausdorff distance between two point clouds](#hausdorff-distance-between-two-point-clouds)
@@ -70,8 +88,16 @@ The following dependencies are required to install with `pip`:
 - [Compute shortest signed distances to a triangle mesh with fast winding numbers](#compute-shortest-signed-distances-to-a-triangle-mesh-with-fast-winding-numbers)
 - [Compute closest points on a mesh](#compute-closest-points-on-a-mesh)
 - [Deduplicating point clouds and meshes](#deduplicating-point-clouds-and-meshes)
+- [Removing unreferenced mesh verrtices](#removing-unreferenced-mesh-vertices)
+- [Calculating face areas of a mesh](#calculating-face-areas-of-a-mesh)
 - [Smoothing a mesh](#smoothing-a-mesh)
+- [Computing connected componentes](#computing-connected-components)
+- [Decimating a triangle mesh](#decimating-a-triangle-mesh)
 - [Making a mesh watertight](#making-a-mesh-watertight)
+- [Ray/Mesh intersection](#ray-mesh-intersection)
+- [Ray/Surfel intersection](#ray-surfel-intersection)
+- [Computing curvature on a mesh](#computing-curvature-on-a-mesh)
+- [Computing a consistent inside/outside for a triangle soup](#computing-a-consistent-inside-and-outside-for-a-triangle-soup)
 
 
 ### Loading meshes and point clouds
@@ -142,6 +168,8 @@ mesh = pcu.TriangleMesh("path/to/mesh")
 For meshes and point clouds with more complex attributes, use `save_triangle_mesh` which accepts a whole host of named
 arguments which control the attributes to save.
 ```python
+import point_cloud_utils as pcu
+
 # save_triangle_mesh accepts a path to save to (The type of mesh  saved is determined by the file extesion),
 # an array of mesh vertices of shape [V, 3], and optional arguments specifying faces, per-mesh attributes,
 # per-face attributes and per-wedge attributes:
@@ -188,6 +216,7 @@ import point_cloud_utils as pcu
 #   f are the mesh face indices into v of shape [F, 3]
 #   n are the mesh per-vertex normals of shape [V, 3]
 #   c are the mesh per-vertex colors of shape [V, 4]
+v, f, n, c = pcu.load_mesh_vfnc("input_mesh.ply")
 
 # Save mesh vertices and faces
 pcu.save_mesh_vf("path/to/mesh", v, f)
@@ -211,7 +240,6 @@ v, f, n, c = pcu.save_mesh_vfnc("path/to/mesh", v, f, n, c)
 Generate 10000 samples on a mesh with poisson disk samples
 ```python
 import point_cloud_utils as pcu
-import numpy as np
 
 # v is a nv by 3 NumPy array of vertices
 # f is an nf by 3 NumPy array of face indexes into v
@@ -223,8 +251,8 @@ v, f, n = pcu.load_mesh_vfn("my_model.ply")
 f_i, bc = pcu.sample_mesh_poisson_disk(v, f, n, 10000)
 
 # Use the face indices and barycentric coordinate to compute sample positions and normals
-v_poisson = pcu.interpolate_barycentric_coords(f, fi, bc, v)
-n_poisson = pcu.interpolate_barycentric_coords(f, fi, bc, n)
+v_poisson = pcu.interpolate_barycentric_coords(f, f_i, bc, v)
+n_poisson = pcu.interpolate_barycentric_coords(f, f_i, bc, n)
 ```
 
 Generate blue noise samples on a mesh separated by approximately 0.01 times the bounding box diagonal
@@ -246,8 +274,8 @@ bbox_diag = np.linalg.norm(bbox)
 f_i, bc = pcu.sample_mesh_poisson_disk(v, f, n, 10000)
 
 # Use the face indices and barycentric coordinate to compute sample positions and normals
-v_sampled = pcu.interpolate_barycentric_coords(f, fi, bc, v)
-n_sampled = pcu.interpolate_barycentric_coords(f, fi, bc, n)
+v_sampled = pcu.interpolate_barycentric_coords(f, f_i, bc, v)
+n_sampled = pcu.interpolate_barycentric_coords(f, f_i, bc, n)
 ```
 
 ### Generate random samples on a mesh
@@ -261,12 +289,12 @@ import numpy as np
 v, f, n = pcu.load_mesh_vfn("my_model.ply")
 
 # Generate random samples on the mesh (v, f, n)
-# f_idx are the face indices of each sample and bc are barycentric coordinates of the sample within a face
-f_idx, bc = pcu.sample_mesh_random(v, f, num_samples=v.shape[0] * 40)
+# f_i are the face indices of each sample and bc are barycentric coordinates of the sample within a face
+f_i, bc = pcu.sample_mesh_random(v, f, num_samples=v.shape[0] * 40)
 
 # Use the face indices and barycentric coordinate to compute sample positions and normals
-v_sampled = pcu.interpolate_barycentric_coords(f, fi, bc, v)
-n_sampled = pcu.interpolate_barycentric_coords(f, fi, bc, n)
+v_sampled = pcu.interpolate_barycentric_coords(f, f_i, bc, v)
+n_sampled = pcu.interpolate_barycentric_coords(f, f_i, bc, n)
 ```
 
 ### Downsample a point cloud to have a blue noise distribution
@@ -296,7 +324,7 @@ import numpy as np
 
 # v is a nv by 3 NumPy array of vertices
 # n is a nv by 3 NumPy array of vertex normals
-# n is a nv by 4 NumPy array of vertex colors
+# c is a nv by 4 NumPy array of vertex colors
 v, n, c = pcu.load_mesh_vnc("my_model.ply")
 
 # We'll use a voxel grid with 128 voxels per axis
@@ -309,8 +337,8 @@ bbox_size = v.max(0) - v.min(0)
 sizeof_voxel = bbox_size / num_voxels_per_axis
 
 # Downsample a point cloud on a voxel grid so there is at most one point per voxel.
-# Multiple points, normals, and colors within a voxel cell are averaged together.
-v_sampled, n_sampled, c_sampled = pcu.downsample_point_cloud_voxel_grid(sizeof_voxel, v, n, c)
+# Any arguments after the points are treated as attribute arrays and get averaged within each voxel
+v_sampled, n_sampled, c_sampled = pcu.downsample_point_cloud_on_voxel_grid(sizeof_voxel, v, n, c)
 ```
 
 Specifying the location of the voxel grid in space (e.g. to only consider points wihtin a sub-region of the point cloud)
@@ -320,7 +348,7 @@ import numpy as np
 
 # v is a nv by 3 NumPy array of vertices
 # n is a nv by 3 NumPy array of vertex normals
-# n is a nv by 4 NumPy array of vertex colors
+# c is a nv by 4 NumPy array of vertex colors
 v, n, c = pcu.load_mesh_vnc("my_model.ply")
 
 # We'll use a voxel grid with 128 voxels per axis
@@ -351,7 +379,7 @@ import numpy as np
 
 # v is a nv by 3 NumPy array of vertices
 # n is a nv by 3 NumPy array of vertex normals
-# n is a nv by 4 NumPy array of vertex colors
+# c is a nv by 4 NumPy array of vertex colors
 v, n, c = pcu.load_mesh_vnc("my_model.ply")
 
 # We'll use a voxel grid with 128 voxels per axis
@@ -375,6 +403,7 @@ v_sampled, n_sampled, c_sampled = pcu.downsample_point_cloud_voxel_grid(sizeof_v
 ### Compute closest points on a mesh
 ```python
 import point_cloud_utils as pcu
+import numpy as np
 
 # v is a nv by 3 NumPy array of vertices
 v, f = pcu.load_mesh_vf("my_model.ply")
@@ -406,6 +435,50 @@ n = pcu.estimate_point_cloud_normals_knn(v, 16)
 
 # Estimate a normal at each point (row of v) using its neighbors within a 0.1-radius ball
 n = pcu.estimate_point_cloud_normals_ball(v, 0.1)
+```
+
+
+### Computing mesh normals per vertex
+```python
+import point_cloud_utils as pcu
+
+# v is a nv by 3 NumPy array of vertices
+# f is an nf by 3 NumPy array of face indexes into v
+v, f = pcu.load_mesh_vf("my_model.ply")
+
+# Estimate per-vertex normal using the average of adjacent face normals
+# n is a NumPy array of shape [nv, 3] where n[i] is the normal of vertex v[i]
+n = pcu.estimate_mesh_vertex_normals(v, f)
+```
+
+
+### Computing mesh normals per face
+```python
+import point_cloud_utils as pcu
+
+# v is a nv by 3 NumPy array of vertices
+# f is an nf by 3 NumPy array of face indexes into v
+v, f = pcu.load_mesh_vf("my_model.ply")
+
+# Estimate per-face normal using the average of adjacent face normals
+# n is a NumPy array of shape [nf, 3] where n[i] is the normal of face f[i]
+n = pcu.estimate_mesh_face_normals(v, f)
+```
+
+
+### Consistently orienting faces of a mesh
+```python
+import point_cloud_utils as pcu
+
+# v is a nv by 3 NumPy array of vertices
+# f is an nf by 3 NumPy array of face indexes into v
+v, f = pcu.load_mesh_vf("my_model.ply")
+
+# Re-orient faces in a mesh so they are consistent within each connected component
+# f_orient is a (nf, 3)-shaped array of re-oriented faces indexes into v
+# f_comp_ids is a (nf,)-shaped array of component ids for each face
+#    i.e. f_comp_ids[i] is the connected component id of face f[i] (and f_orient[i])
+f_oriented, f_comp_ids = pcu.orient_mesh_faces(f)
 ```
 
 
@@ -465,11 +538,11 @@ hausdorff_dist = pcu.hausdorff_distance(a, b)
 
 # Find the index pairs of the two points with maximum shortest distancce
 hausdorff_b_to_a, idx_b, idx_a = pcu.one_sided_hausdorff_distance(b, a, return_index=True)
-assert np.abs(np.sum((a[idx_a] - b[idx_b])**2) - hausdorff_b_to_a) < 1e-5, "These values should be almost equal"
+assert np.abs(np.sum((a[idx_a] - b[idx_b])**2) - hausdorff_b_to_a**2) < 1e-5, "These values should be almost equal"
 
 # Find the index pairs of the two points with maximum shortest distancce
 hausdorff_dist, idx_b, idx_a = pcu.hausdorff_distance(b, a, return_index=True)
-assert np.abs(np.sum((a[idx_a] - b[idx_b])**2) - hausdorff_dist) < 1e-5, "These values should be almost equal"
+assert np.abs(np.sum((a[idx_a] - b[idx_b])**2) - hausdorff_dist**2) < 1e-5, "These values should be almost equal"
 
 ```
 
@@ -479,14 +552,16 @@ import point_cloud_utils as pcu
 import numpy as np
 
 # Generate two random point sets
-a = np.random.rand(1000, 3)
-b = np.random.rand(500, 3)
+pts_a = np.random.rand(1000, 3)
+pts_b = np.random.rand(500, 3)
 
-# dists_a_to_b is of shape (a.shape[0],) and contains the shortest squared distance
-# between each point in a and the points in b
-# corrs_a_to_b is of shape (a.shape[0],) and contains the index into b of the
-# closest point for each point in a
-dists_a_to_b, corrs_a_to_b = pcu.shortest_distance_pairs(a, b)
+k = 10
+
+# dists_a_to_b is of shape (pts_a.shape[0], k) and contains the (sorted) distances
+# to the k nearest points in pts_b
+# corrs_a_to_b is of shape (a.shape[0], k) and contains the index into pts_b of the
+# k closest points for each point in pts_a
+dists_a_to_b, corrs_a_to_b = pcu.k_nearest_neighbors(pts_a, pts_b, k)
 ```
 
 ### Generating point samples in the square and cube with Lloyd relaxation
@@ -510,6 +585,7 @@ samples_3d = pcu.lloyd_3d(100)
 ### Compute shortest signed distances to a triangle mesh with [fast winding numbers](https://www.dgp.toronto.edu/projects/fast-winding-numbers/)
 ```python
 import point_cloud_utils as pcu
+import numpy as np
 
 # v is a nv by 3 NumPy array of vertices
 # f is an nf by 3 NumPy array of face indexes into v
@@ -537,7 +613,7 @@ p, n = pcu.load_mesh_vn("my_pcloud.ply")
 # Treat any points closer than 1e-7 apart as the same point
 # idx_i is an array of indices such that p_dedup = p[idx_i]
 # idx_j is an array of indices such that p = p_dedup[idx_j]
-p_dedup, idx_i, idx_j  = deduplicate_point_cloud(p, 1e-7)
+p_dedup, idx_i, idx_j  = pcu.deduplicate_point_cloud(p, 1e-7)
 
 # Use idx_i to deduplicate the normals
 n_dedup = n[idx_i]
@@ -545,6 +621,7 @@ n_dedup = n[idx_i]
 
 #### Meshes:
 ```python
+import point_cloud_utils as pcu
 # v is a (nv, 3)-shaped NumPy array of vertices
 # f is an (nf, 3)-shaped NumPy array of face indexes into v
 # c is a (nv, 4)-shaped numpy array of per-vertex colors
@@ -557,6 +634,37 @@ v_dedup, f_dedup, idx_i, idx_j = pcu.deduplicate_mesh_vertices(v, f, 1e-7)
 
 # Use idx_i to deduplicate the colors
 c_dedup = c[idx_i]
+```
+
+### Removing unreferenced mesh vertices
+```python
+import point_cloud_utils as pcu
+# v is a (nv, 3)-shaped NumPy array of vertices
+# f is an (nf, 3)-shaped NumPy array of face indexes into v
+# c is a (nv, 4)-shaped numpy array of per-vertex colors
+v, f, c = pcu.load_mesh_vfc("my_model.ply")
+
+# Treat any points closer than 1e-7 apart as the same point
+# idx_v is an array of indices mapping each vertex in the output mesh to its index in the input
+# idx_f is an array of indices mapping each face in the output mesh to its index in the input
+v_clean, f_clean, idx_v, idx_f = pcu.remove_unreferenced_mesh_vertices(v, f)
+
+c_clean = c[idx_v]
+```
+
+
+### Calculating face areas of a mesh
+```python
+import point_cloud_utils as pcu
+# v is a (nv, 3)-shaped NumPy array of vertices
+# f is an (nf, 3)-shaped NumPy array of face indexes into v
+v, f = pcu.load_mesh_vf("my_model.ply")
+
+# Compute areas of each face, face_areas[i] is the area of face f[i]
+face_areas = pcu.mesh_face_areas
+
+# Remove faces with small areas
+f_new = f[face_areas < 1e-4]
 ```
 
 
@@ -575,6 +683,39 @@ use_cotan_weights = True  # Whether to use cotangent weighted laplacian
 vsmooth = pcu.laplacian_smooth_mesh(v, f, num_iters, use_cotan_weights=use_cotan_weights)
 ```
 
+### Computing connected components
+```python
+import point_cloud_utils as pcu
+import numpy as np
+
+# v is a nv by 3 NumPy array of vertices
+# f is an nf by 3 NumPy array of face indexes into v
+v, f = pcu.load_mesh_vf("my_model.ply")
+
+# cv is the index of the connected component of each vertex
+# nv is the number of vertices per component
+# cf is the index of the connected component of each face
+# nf is the number of faces per connected component
+cv, nv, cf, nf = pcu.connected_components(v, f)
+
+# Extract mesh of connected component with most faces
+comp_max = np.argmax(nf)
+v_max, f_max, _, _ = pcu.remove_unreferenced_mesh_vertices(v, f[cf == comp_max])
+```
+
+### Decimating a triangle mesh
+```python
+import point_cloud_utils as pcu
+
+v, f = pcu.load_mesh_vf("mymesh.ply")
+target_num_faces = f.shape[0] // 10  # Downsample by a factor of 10
+
+# v_decimate, f_decimate are the vertices/faces of the decimated mesh
+# v_correspondence, f_correspondence are the vertices and faces in the dense mesh which generated each
+# downsampled vertex/face
+v_decimate, f_decimate, v_correspondence, f_correspondence = pcu.decimate_triangle_mesh(v, f, target_num_faces)
+pcu.save_mesh_vf("decimated.ply", v_decimate, f_decimate)
+```
 
 ### Making a Mesh Watertight
 ```python
@@ -586,6 +727,102 @@ v, f = pcu.load_mesh_vf("my_model.ply")
 
 # Optional resolution parameter (default is 20_000).
 # See https://github.com/hjwdzh/Manifold for details
-resolution = 20_000  
+resolution = 20_000
 v_watertight, f_watertight = pcu.make_mesh_watertight(v, f, resolution=resolution)
+```
+
+
+### Ray/Mesh Intersection
+```python
+import point_cloud_utils as pcu
+import numpy as np
+
+# v is a #v by 3 NumPy array of vertices
+# f is an #f by 3 NumPy array of face indexes into v
+# c is a #v by 4 array of vertex colors
+v, f, c = pcu.load_mesh_vfc("my_model.ply")
+
+# Generate rays on an image grid
+uv = np.stack([a.ravel() for a in np.mgrid[-1:1:128j, -1.:1.:128j]], axis=-1)
+ray_d = np.concatenate([uv, np.ones([uv.shape[0], 1])], axis=-1)
+ray_d = ray_d / np.linalg.norm(ray_d, axis=-1, keepdims=True)
+ray_o = np.array([[2.5, 0, -55.0] for _ in range(ray_d.shape[0])])
+
+# Intersect rays with geometry
+intersector = pcu.RayMeshIntersector(v, f)
+
+# fid is the index of each face intersected (-1 for ray miss)
+# bc are the barycentric coordinates of each intersected ray
+# t are the distances from the ray origin to the intersection for each ray (inf for ray miss)
+fid, bc, t = intersector.intersect_rays(ray_o, ray_d)
+
+# Get intersection positions and colors by interpolating on the faces
+hit_mask = np.isfinite(t)
+hit_pos = pcu.interpolate_barycentric_coords(f, fid[hit_mask], bc[hit_mask], v)
+hit_clr = pcu.interpolate_barycentric_coords(f, fid[hit_mask], bc[hit_mask], c)
+```
+
+### Ray/Surfel Intersection
+```python
+import point_cloud_utils as pcu
+import numpy as np
+
+# v is a #v by 3 NumPy array of vertices
+# n is a #v by 3 NumPy array of vertex normals
+v, n = pcu.load_mesh_vn("my_model.ply")
+
+# Generate rays on an image grid
+uv = np.stack([a.ravel() for a in np.mgrid[-1:1:128j, -1.:1.:128j]], axis=-1)
+ray_d = np.concatenate([uv, np.ones([uv.shape[0], 1])], axis=-1)
+ray_d = ray_d / np.linalg.norm(ray_d, axis=-1, keepdims=True)
+ray_o = np.array([[2.5, 0, -55.0] for _ in range(ray_d.shape[0])])
+
+# Intersect rays with surfels with fixed radius 0.55
+intersector = pcu.RaySurfelIntersector(v, n, r=0.55)
+
+# pid is the index of each point intersected by a ray
+# t are the distances from the ray origin to the intersection for each ray (inf for ray miss)
+pid, t = intersector.intersect_rays(ray_o, ray_d)
+
+# Get points intersected by rays
+hit_mask = pid >= 0
+intersected_points = v[pid[hit_mask]]
+```
+
+### Computing curvature on a mesh
+```python
+import point_cloud_utils as pcu
+
+# v is a #v by 3 NumPy array of vertices
+# f is an #f by 3 NumPy array of face indexes into v
+v, f = pcu.load_mesh_vfc("my_model.ply")
+
+# Compute principal min/max curvature magnitudes (k1, k2) and directions (d1, d2)
+# using the one ring of each vertex
+k1, k2, d1, d2 = pcu.mesh_principal_curvatures(v, f)
+
+# Compute principal min/max curvature magnitudes (k1, k2) and directions (d1, d2)
+# using a radius. This method is much more robust but requires tuning the radius
+k1, k2, d1, d2 = pcu.mesh_principal_curvatures(v, f, r=0.1)
+
+# Compute Mean (kh) and Gaussian (kg) curvatures using the one ring of each vertex
+kh, kg = pcu.mesh_mean_and_gaussian_curvatures(v, f)
+
+# Compute Mean (kh) and Gaussian (kg) curvatures using using a radius.
+# This method is much more robust but requires tuning the radius
+kh, kg = pcu.mesh_mean_and_gaussian_curvatures(v, f, r=0.1)
+```
+
+### Computing a consistent inside and outside for a triangle soup
+```python
+import point_cloud_utils as pcu
+import numpy as np
+
+v, f = pcu.load_mesh_vf("my_model.ply")
+
+# We're going to evaluate the inside/outside sign of 1000 points
+p = np.random.rand(1000, 3)
+
+# w has shape (1000,) where w[i] is the sign (positive for outside, negative for inside) of p[i]
+w = pcu.triangle_soup_fast_winding_number(v, f, p.astype(v.dtype))
 ```

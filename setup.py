@@ -87,11 +87,11 @@ def main():
         sys.argv.remove('--exclude-arch')
 
     setuptools.setup(
-        name="pypcu",
-        version="0.22.0",
+        name="point-cloud-utils",
+        version="0.27.1",
         author="Francis Williams",
         author_email="francis@fwilliams.info",
-        description="A Python Library of utilities for point clouds",
+        description="A Python library for common tasks on 3D point clouds and meshes",
         long_description=long_description,
         long_description_content_type="text/markdown",
         url="https://github.com/fwilliams/point-cloud-utils",

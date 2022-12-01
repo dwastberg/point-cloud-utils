@@ -20,6 +20,11 @@ list(APPEND CMAKE_MODULE_PATH ${EXTERNAL_DEP_DIR}/numpyeigen/cmake)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 include(numpyeigen) # This will define Eigen3::Eigen if we enabled NPE_WITH_EIGEN
 
+download_dep(tinyply
+        GIT_REPOSITORY https://github.com/fwilliams/tinyply.git
+        GIT_TAG point_cloud_utils
+)
+
 # Build manifold as a static lib
 download_dep(manifold
   GIT_REPOSITORY https://github.com/hjwdzh/Manifold.git
@@ -35,8 +40,7 @@ set(
     ${MANIFOLD_SRC_DIR}/main.cpp
     ${MANIFOLD_SRC_DIR}/Model_OBJ.cpp
     ${MANIFOLD_SRC_DIR}/Model_OBJ.h
-    ${MANIFOLD_SRC_DIR}/Octree.h
-)
+    ${MANIFOLD_SRC_DIR}/Octree.h)
 add_library(manifold STATIC ${manifold_SRC})
 set_target_properties(manifold PROPERTIES LINKER_LANGUAGE CXX)
 target_include_directories(manifold PUBLIC ${MANIFOLD_SRC_DIR})
@@ -44,7 +48,7 @@ target_include_directories(manifold PRIVATE ${EXTERNAL_DEP_DIR}/manifold/3rd)
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_compile_options(manifold PRIVATE "${CMAKE_CXX_FLAGS} -Wall -pthread -DWITH_OMP  -Wno-int-in-bool-context -Wsign-compare -fsanitize=address")
 else()
-    target_compile_options(manifold PRIVATE "${CMAKE_CXX_FLAGS} -Wall -pthread -O3 -DWITH_OMP  -Wno-int-in-bool-context -Wsign-compare")
+    target_compile_options(manifold PRIVATE "${CMAKE_CXX_FLAGS} -DWITH_OMP ")
 endif()
 
 
@@ -135,11 +139,17 @@ npe_add_module(_pcu_internal
   ${CMAKE_CURRENT_SOURCE_DIR}/src/closest_point_on_mesh.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/connected_components.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/ray_mesh_intersection.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/ray_point_cloud_intersection.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/smooth.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/manifold.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/curvature.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/sparse_voxel_grid.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/marching_cubes.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/mesh_decimate.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/remove_unreferenced_mesh_vertices.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/face_areas.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/fast_winding_numbers.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/orient_mesh_faces.cpp
   EXTRA_MODULE_FUNCTIONS
   hack_extra_bindings
   hack_extra_ray_mesh_bindings
@@ -148,7 +158,10 @@ npe_add_module(_pcu_internal
 # TODO: Make common into its own library that we link statically
 target_sources(_pcu_internal PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/common/morton_code.cpp)
 target_sources(_pcu_internal PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/common/geogram_utils.cpp)
+target_sources(_pcu_internal PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/common/embree_intersector.cpp)
 target_sources(_pcu_internal PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/external/vcglib/wrap/ply/plylib.cpp)
+# target_sources(_pcu_internal PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/external/tinyply/source/tinyply.cpp)
+target_include_directories(_pcu_internal PRIVATE ${EXTERNAL_DEP_DIR}/tinyply/source)
 target_include_directories(_pcu_internal PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/external/vcglib)
 target_include_directories(_pcu_internal PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_include_directories(_pcu_internal PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/external/nanoflann)

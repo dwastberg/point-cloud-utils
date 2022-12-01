@@ -1,19 +1,48 @@
+from warnings import warn
+
+
 from ._pcu_internal import sample_mesh_poisson_disk, sample_mesh_random, \
-    downsample_point_cloud_poisson_disk, estimate_mesh_normals, \
+    downsample_point_cloud_poisson_disk, estimate_mesh_vertex_normals, \
+    estimate_mesh_face_normals, orient_mesh_faces, \
     k_nearest_neighbors, one_sided_hausdorff_distance, \
     morton_encode, morton_decode, morton_knn, \
     lloyd_2d, lloyd_3d, voronoi_centroids_unit_cube, sample_mesh_lloyd, \
     deduplicate_point_cloud, deduplicate_mesh_vertices, signed_distance_to_mesh, \
     closest_points_on_mesh, connected_components, ray_mesh_intersection, laplacian_smooth_mesh, \
-    make_mesh_watertight, mesh_principal_curvatures, mesh_mean_and_gaussian_curvatures, \
-    morton_add, morton_subtract, \
-    sparse_voxel_grid_boundary, marching_cubes_sparse_voxel_grid
+    make_mesh_watertight, mesh_principal_curvatures, \
+    morton_add, morton_subtract, point_cloud_fast_winding_number, \
+    sparse_voxel_grid_boundary, marching_cubes_sparse_voxel_grid, decimate_triangle_mesh, \
+    remove_unreferenced_mesh_vertices, mesh_face_areas, triangle_soup_fast_winding_number
 
 from ._sinkhorn import *
 from ._mesh_io import *
 from ._octree import *
 from ._pointcloud_normals import estimate_point_cloud_normals_knn, estimate_point_cloud_normals_ball
 from ._ray_mesh_intersector import RayMeshIntersector
+from ._ray_point_cloud_intersector import ray_surfel_intersection, surfel_geometry, RaySurfelIntersector
+
+
+def mesh_mean_and_gaussian_curvatures(v, f, r=-1.0):
+    """
+    Estimate mean and Gaussian curvatures for a mesh
+
+    Parameters
+    ----------
+    v : #v by 3 Matrix of mesh vertex 3D positions
+    f : #f by 3 Matrix of face (triangle) indices
+    r : optional floating point radius of neighborhood to consider when estimating curvature
+        If set to a positive value, will use a more robust curvature estimation method (but may require some tuning)
+
+    Returns
+    -------
+    A tuple (kh, kg) where:
+    kh is an array of shape (#v,) of per-vertex mean curvatures
+    kg is an array of shape (#v,) of per-vertex Gaussian curvatures
+    :return:
+    """
+    k1, k2, _, _ = mesh_principal_curvatures(v, f, r)
+
+    return 0.5 * (k1 + k2), (k1 * k2)
 
 
 def hausdorff_distance(x, y, return_index=False, squared_distances=False, max_points_per_leaf=10):
@@ -93,17 +122,16 @@ def chamfer_distance(x, y, return_index=False, p_norm=2, max_points_per_leaf=10)
     return cham_dist
 
 
-def downsample_point_cloud_voxel_grid(voxel_size, points, normals=None, colors=None, min_bound=None, max_bound=None,
-                                      min_points_per_voxel=1):
+def downsample_point_cloud_on_voxel_grid(voxel_size, points, *args, min_bound=None, max_bound=None, min_points_per_voxel=1):
     """
     Downsample a point set to conform with a voxel grid by taking the average of points within each voxel.
 
     Parameters
     ----------
     voxel_size : a scalar representing the size of each voxel or a 3 tuple representing the size per axis of each voxel.
-    points: a #v x 3 array of 3d points.
-    normals: a #v x 3 array of 3d normals per point or None for no normals.
-    colors: a #v x 3 or #v x 4 array of colors per point or None for no colors.
+    points: a [#v, 3]-shaped array of 3d points.
+    *args: Any additional arguments of shape [#v, *] are treated as attributes and will averaged into each voxel along with the points
+           These will be returns
     min_bound: a 3 tuple representing the minimum coordinate of the voxel grid or None to use the bounding box of the
                input point cloud.
     max_bound: a 3 tuple representing the maximum coordinate of the voxel grid or None to use the bounding box of the
@@ -113,8 +141,9 @@ def downsample_point_cloud_voxel_grid(voxel_size, points, normals=None, colors=N
 
     Returns
     -------
-    A triple (v, n, c) of downsampled vertices, normals and colors. If no vertices or colors are passed in, then
-    n and c are None.
+    A tuple (v, attrib0, attrib1, ....) of downsampled points, and point attributes.
+    Attributes are returned in the same order they are passed in.
+    If no attributes are passed in, then this function simply returns vertices.
     """
     from ._pcu_internal import downsample_point_cloud_voxel_grid_internal
 
@@ -124,14 +153,17 @@ def downsample_point_cloud_voxel_grid(voxel_size, points, normals=None, colors=N
         voxel_size = np.array(voxel_size)
         if len(voxel_size) != 3:
             raise ValueError("Invalid voxel size must be a 3-tuple or a single float")
-    has_normals = True
-    has_colors = True
-    if normals is None:
-        normals = np.zeros([0, 0]).astype(points.dtype)
-        has_normals = False
-    if colors is None:
-        colors = np.zeros([0, 0]).astype(points.dtype)
-        has_colors = False
+
+    if type(points) != np.ndarray:
+        raise ValueError("points must be a numpy array but got type " + str(type(points)))
+    attribs = []
+    for i, arg in enumerate(args):
+        if type(arg) != np.ndarray:
+            raise ValueError("Additional arguments after points and before keyword arguments must be numpy arrays")
+        if arg.shape[0] != points.shape[0]:
+            raise ValueError("Attribute " + str(i) + " must have same first dimension as number of points (" + str(points.shape) + " but got attrib.shape = " + str(arg.shape))
+        attribs.append(arg)
+
     if min_bound is None:
         min_bound = np.min(points, axis=0) - voxel_size * 0.5
     if max_bound is None:
@@ -147,19 +179,29 @@ def downsample_point_cloud_voxel_grid(voxel_size, points, normals=None, colors=N
     if np.any(max_bound - min_bound <= 0.0):
         raise ValueError("Invalid min_bound and max_bound. max_bound must be greater than min_bound in all dimensions")
 
-    ret_v, ret_n, ret_c = downsample_point_cloud_voxel_grid_internal(points,
-                                                                     normals.astype(points.dtype),
-                                                                     colors.astype(points.dtype),
-                                                                     voxel_size[0], voxel_size[1], voxel_size[2],
-                                                                     min_bound[0], min_bound[1], min_bound[2],
-                                                                     max_bound[0], max_bound[1], max_bound[2],
-                                                                     min_points_per_voxel)
-    ret = [ret_v, None, None]
-    if has_normals:
-        ret[1] = ret_n
-    if has_colors:
-        ret[2] = ret_c
-    return tuple(ret)
+
+    a0 = attribs[0] if len(attribs) > 0 else np.zeros([0, 0])
+    ret_v, ret_a0 = downsample_point_cloud_voxel_grid_internal(points, a0,
+                                                               voxel_size[0], voxel_size[1], voxel_size[2],
+                                                               min_bound[0], min_bound[1], min_bound[2],
+                                                               max_bound[0], max_bound[1], max_bound[2],
+                                                               min_points_per_voxel)
+    if ret_a0.size > 0:
+        ret = [ret_v, ret_a0]
+    else:
+        ret = [ret_v]
+    for i in range(1, len(attribs)):
+        _, ret_ai = downsample_point_cloud_voxel_grid_internal(points, attribs[i],
+                                                               voxel_size[0], voxel_size[1], voxel_size[2],
+                                                               min_bound[0], min_bound[1], min_bound[2],
+                                                               max_bound[0], max_bound[1], max_bound[2],
+                                                               min_points_per_voxel)
+        ret.append(ret_ai)
+
+    if len(ret) > 1:
+        return tuple(ret)
+    else:
+        return ret_v
 
 
 def interpolate_barycentric_coords(f, fi, bc, attribute):
